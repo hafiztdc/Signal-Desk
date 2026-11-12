@@ -1,0 +1,76 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signal Desk</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#090e19;color:#ecf3ff;font:16px system-ui}main{max-width:680px;margin:auto;padding:26px 18px 100px}header,nav,.row{display:flex;justify-content:space-between;align-items:center;gap:10px}header{border-bottom:1px solid #263349;padding-bottom:18px}small,label{color:#a0adc4}button{background:#172238;color:#ecf3ff;border:1px solid #36435e;border-radius:10px;padding:10px;cursor:pointer}button[aria-selected=true]{color:#54f0b6;border-color:#54f0b6}nav{justify-content:start;margin:22px 0}h1{font-size:clamp(30px,7vw,44px);margin:0}h2{margin:0}.card{background:#101827;border:1px solid #283752;border-radius:20px;padding:20px;margin:14px 0}.signal{border-color:#50354d}.badge{background:#392036;color:#ffa6bc;padding:8px 12px;border-radius:8px;font-weight:bold}.status{color:#54f0b6;margin:14px 0}.entry{text-align:center;color:#62ddff;background:#102334}.value{font-size:clamp(23px,5vw,39px);display:block;margin-top:6px;font-weight:bold}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.tile{padding:16px;border-radius:12px;border:1px solid #34445c;min-width:0}.hit{border-color:#54f0b6;color:#54f0b6;background:#102824}.reason{border-left:3px solid #ad8dff;padding:10px 14px;background:#151d30}.bars{display:flex;align-items:end;gap:8px;height:145px;margin-top:20px}.bar{flex:1;text-align:center;color:#a0adc4;font-size:12px}.bar i{display:block;background:#54f0b6;border-radius:5px;margin-bottom:7px}select{max-width:100%;background:#172238;color:#fff;padding:8px;border-radius:8px}footer{margin-top:18px}#feed{color:#bda3ff}
+</style>
+<main><header><div><strong>Signal Desk</strong><br><small id="feed">DEMO DATA</small></div><button id="connect">Connect MT5 folder</button></header>
+<nav aria-label="Dashboard"><button id="live" aria-selected="true">Live Signal</button><button id="stats" aria-selected="false">Stats</button></nav>
+<p id="notice" role="status"></p><div id="panel"></div></main>
+<script>
+const demo = {symbol:'XAUUSD', direction:'SELL', entry:'4,051.79', sl:'4,051.79', tp:'4,048.79', tp2:'4,045.79', tp3:'4,039.79'};
+const panel=document.querySelector('#panel'), notice=document.querySelector('#notice');
+let directory, records=[], selected='', tab='live';
+const escapeText=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+function tile(label,value,hit=false){return '<div class="tile '+(hit?'hit':'')+'"><small>'+label+'</small><strong class="value">'+escapeText(value)+'</strong></div>'}
+function render(){
+ const sample=!directory;
+ if(tab==='stats'){
+   panel.innerHTML='<h1>Stats</h1><p><small>Closed signal performance</small></p>';
+   if(!sample){panel.innerHTML+='<div class="card">Closed-trade data is required for live stats. The current EA exports orders, entries and SL / TP changes.</div>';return}
+   panel.innerHTML+='<div class="card entry"><small>DEMO · TODAY</small><strong class="value">+323 pips</strong></div><div class="grid">'+tile('WIN RATE','75%')+tile('SIGNALS CLOSED','4')+tile('TP1 FILLED','3')+tile('SL HIT','1')+'</div><div class="card"><h2>Last 7 days</h2><div class="bars">'+[22,56,34,72,50,95,44].map((v,i)=>'<div class="bar"><i style="height:'+v+'px"></i>Day '+(i+1)+'</div>').join('')+'</div></div>';return;
+ }
+ const record=sample?demo:records.find(item=>item.name===selected)??records[0];
+ if(!record){panel.innerHTML='<div class="card">Waiting for a TradeSignal file from MT5.</div>';return}
+ panel.innerHTML=(sample?'':'<label>Signal <select id="select"></select></label>')+'<section class="card signal"><div class="row"><h1>'+escapeText(record.symbol)+'</h1><span class="badge">'+escapeText(record.direction)+'</span></div><div class="status">'+(sample?'TP1 FILLED · BREAK-EVEN SET':record.pending?'PENDING ORDER SNAPSHOT':'ENTRY FILL SNAPSHOT')+'</div>'+(sample?'<div class="card hit"><small>RUNNING</small><strong class="value">+69 pips</strong><small>Peak +75 pips</small></div><p class="reason"><small>SETUP</small><br>Bearish momentum after resistance rejection</p>':'')+'<div class="card entry"><small>ENTRY</small><strong class="value">'+escapeText(record.entry)+'</strong></div><div class="grid">'+tile(sample?'STOP LOSS · BREAK-EVEN':'STOP LOSS',record.sl,sample)+tile(sample?'TP1 ✓':'TAKE PROFIT',record.tp,sample)+(sample?tile('TP2',record.tp2)+tile('TP3',record.tp3):'')+'</div><footer><button id="copy">Copy signal</button></footer></section>';
+ const select=document.querySelector('#select');
+ if(select){
+   for(const item of records)select.add(new Option(item.symbol+' · '+item.direction+' · '+item.name,item.name));
+   select.value=record.name;select.onchange=()=>{selected=select.value;render()};
+ }
+ document.querySelector('#copy').onclick=async()=>{
+   const message=[sample?'DEMO SIGNAL':record.pending?'PENDING ORDER':'TRADE SIGNAL',record.symbol+' '+record.direction,'Entry: '+record.entry,'SL: '+record.sl,(sample?'TP1: ':'TP: ')+record.tp];
+   if(sample)message.push('TP2: '+record.tp2,'TP3: '+record.tp3);
+   try{await navigator.clipboard.writeText(message.join('\n'));notice.textContent='Signal copied.'}catch{notice.textContent='Clipboard unavailable in this browser.'}
+ };
+}
+function parse(text,name,modified){
+ const lines=text.split(/\r?\n/);
+ const value=key=>lines.find(line=>line.includes(key+':'))?.split(key+':')[1]?.trim();
+ const direction=value('Direction'),entry=value('Entry'),sl=value('SL'),tp=value('TP');
+ if(!direction||!entry||!sl||!tp)return null;
+ return {name,modified,symbol:lines[0].trim().split(/\s+/)[1],direction,entry,sl,tp,pending:name.includes('-Order-')};
+}
+let reading=false;
+async function refresh(){
+ if(!directory||reading)return;
+ reading=true;
+ try{
+   const updated=[];
+   for await(const [name,handle] of directory.entries()){
+     if(handle.kind!=='file'||!/^Signal-(?:Order-)?\d+\.txt$/i.test(name))continue;
+     const file=await handle.getFile();
+     const buffer=await file.arrayBuffer();
+     const data=parse(new TextDecoder('utf-16le').decode(buffer),name,file.lastModified);
+     if(data)updated.push(data);
+   }
+   updated.sort((a,b)=>b.modified-a.modified);
+   if(JSON.stringify(updated)!==JSON.stringify(records)){records=updated;render()}
+ }catch(error){notice.textContent='Could not read the folder. Reconnect it to resume.'}
+ finally{reading=false}
+}
+document.querySelector('#connect').onclick=async()=>{
+ if(!window.showDirectoryPicker){notice.textContent='Open this page in desktop Chrome or Edge to connect MT5.';return}
+ try{
+   directory=await window.showDirectoryPicker();
+   selected='';records=[];
+   document.querySelector('#feed').textContent='LOCAL MT5 FILES';
+   notice.textContent='Reading '+directory.name+' on this PC.';
+   render();await refresh();
+ }catch(error){if(error.name!=='AbortError')notice.textContent=error.message}
+};
+for(const id of ['live','stats'])document.querySelector('#'+id).onclick=()=>{
+ tab=id;
+ for(const key of ['live','stats'])document.querySelector('#'+key).setAttribute('aria-selected',String(key===id));
+ render();
+};
+render();setInterval(refresh,2000);
+</script></html>
