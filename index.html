@@ -9,6 +9,8 @@
 const demo = {symbol:'XAUUSD', direction:'SELL', entry:'4,051.79', sl:'4,051.79', tp:'4,048.79', tp2:'4,045.79', tp3:'4,039.79'};
 const panel=document.querySelector('#panel'), notice=document.querySelector('#notice');
 let directory, records=[], selected='', tab='live';
+const peaks=new Map();
+const signed=n=>(n>0?'+':'')+n.toFixed(1);
 const escapeText=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 function tile(label,value,hit=false){return '<div class="tile '+(hit?'hit':'')+'"><small>'+label+'</small><strong class="value">'+escapeText(value)+'</strong></div>'}
 function render(){
@@ -20,7 +22,16 @@ function render(){
  }
  const record=sample?demo:records.find(item=>item.name===selected)??records[0];
  if(!record){panel.innerHTML='<div class="card">Waiting for a TradeSignal file from MT5.</div>';return}
- panel.innerHTML=(sample?'':'<label>Signal <select id="select"></select></label>')+'<section class="card signal"><div class="row"><h1>'+escapeText(record.symbol)+'</h1><span class="badge">'+escapeText(record.direction)+'</span></div><div class="status">'+(sample?'TP1 FILLED · BREAK-EVEN SET':record.pending?'PENDING ORDER SNAPSHOT':'ENTRY FILL SNAPSHOT')+'</div>'+(sample?'<div class="card hit"><small>RUNNING</small><strong class="value">+69 pips</strong><small>Peak +75 pips</small></div><p class="reason"><small>SETUP</small><br>Bearish momentum after resistance rejection</p>':'')+'<div class="card entry"><small>ENTRY</small><strong class="value">'+escapeText(record.entry)+'</strong></div><div class="grid">'+tile(sample?'STOP LOSS · BREAK-EVEN':'STOP LOSS',record.sl,sample)+tile(sample?'TP1 ✓':'TAKE PROFIT',record.tp,sample)+(sample?tile('TP2',record.tp2)+tile('TP3',record.tp3):'')+'</div><footer><button id="copy">Copy signal</button></footer></section>';
+ const gold=/^(GOLD|XAUUSD)/i.test(record.symbol);
+ const pipSize=gold?0.1:/JPY/i.test(record.symbol)?0.01:/^[A-Z]{6}(?:[._-]|$)/i.test(record.symbol)?0.0001:null;
+ const entry=Number(record.entry.replaceAll(',',''));
+ let live='';
+ if(!sample && !record.pending && record.quote!==undefined){
+   const pips=pipSize && entry>0 ? (record.quote-entry)*(record.direction==='SELL'?-1:1)/pipSize : null;
+   if(pips!==null)peaks.set(record.name,Math.max(peaks.get(record.name)??-Infinity,pips));
+   live='<div class="card '+(pips!==null&&pips>=0?'hit':'')+'"><small>CURRENT EXIT QUOTE</small><strong class="value">'+escapeText(record.quoteText)+'</strong>'+(pips===null?'':'<p>Running '+signed(pips)+' pips · Session peak '+signed(peaks.get(record.name))+' pips</p>')+'<small>Feed updated '+escapeText(new Date(record.quoteTime).toLocaleTimeString())+'</small></div>';
+ }
+ panel.innerHTML=(sample?'':'<label>Signal <select id="select"></select></label>')+'<section class="card signal"><div class="row"><h1>'+escapeText(record.symbol)+'</h1><span class="badge">'+escapeText(record.direction)+'</span></div><div class="status">'+(sample?'TP1 FILLED · BREAK-EVEN SET':record.pending?'PENDING ORDER SNAPSHOT':record.quote!==undefined?'OPEN POSITION':'ENTRY FILL SNAPSHOT')+'</div>'+(sample?'<div class="card hit"><small>RUNNING</small><strong class="value">+69 pips</strong><small>Peak +75 pips</small></div><p class="reason"><small>SETUP</small><br>Bearish momentum after resistance rejection</p>':live)+'<div class="card entry"><small>ENTRY</small><strong class="value">'+escapeText(record.entry)+'</strong></div><div class="grid">'+tile(sample?'STOP LOSS · BREAK-EVEN':'STOP LOSS',record.sl,sample)+tile(sample?'TP1 ✓':'TAKE PROFIT',record.tp,sample)+(sample?tile('TP2',record.tp2)+tile('TP3',record.tp3):'')+'</div><footer><button id="copy">Copy signal</button></footer></section>';
  const select=document.querySelector('#select');
  if(select){
    for(const item of records)select.add(new Option(item.symbol+' · '+item.direction+' · '+item.name,item.name));
@@ -44,14 +55,26 @@ async function refresh(){
  if(!directory||reading)return;
  reading=true;
  try{
-   const updated=[];
+   const updated=[], quotes=new Map();
    for await(const [name,handle] of directory.entries()){
-     if(handle.kind!=='file'||!/^Signal-(?:Order-)?\d+\.txt$/i.test(name))continue;
+     if(handle.kind!=='file')continue;
+     const quoteName=/^Quote-(\d+)\.txt$/i.exec(name);
+     if(quoteName){
+       const file=await handle.getFile();
+       if(Date.now()-file.lastModified<10000){
+         const quoteText=new TextDecoder('utf-16le').decode(await file.arrayBuffer()).trim();
+         const quote=Number(quoteText);
+         if(quote>0&&Number.isFinite(quote))quotes.set('Signal-'+quoteName[1]+'.txt',{quote,quoteText,quoteTime:file.lastModified});
+       }
+       continue;
+     }
+     if(!/^Signal-(?:Order-)?\d+\.txt$/i.test(name))continue;
      const file=await handle.getFile();
      const buffer=await file.arrayBuffer();
      const data=parse(new TextDecoder('utf-16le').decode(buffer),name,file.lastModified);
      if(data)updated.push(data);
    }
+   for(const record of updated)Object.assign(record,quotes.get(record.name));
    updated.sort((a,b)=>b.modified-a.modified);
    if(JSON.stringify(updated)!==JSON.stringify(records)){records=updated;render()}
  }catch(error){notice.textContent='Could not read the folder. Reconnect it to resume.'}
@@ -74,3 +97,4 @@ for(const id of ['live','stats'])document.querySelector('#'+id).onclick=()=>{
 };
 render();setInterval(refresh,2000);
 </script></html>
+
